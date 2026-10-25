@@ -168,13 +168,16 @@ async fn fetch(app: &Shared, id: &str, t: i64) -> ApiResult<fmp4::Segment> {
             offset: 0,
             limit: 1024 * 1024,
         };
-        // Occasionally a part request stalls; the UI retries rather than freezing the stream.
+        // Parts normally arrive within about a second; a stalled request is cut short and the UI asks again.
         let result = tokio::time::timeout(
-            Duration::from_secs(8),
+            Duration::from_secs(3),
             app.client.invoke_in_dc(stream.dc, &request),
         )
         .await
-        .map_err(|_| ApiError(StatusCode::GATEWAY_TIMEOUT, "Live part timed out".into()))?;
+        .map_err(|_| {
+            eprintln!("Live part {t}: timed out");
+            ApiError(StatusCode::GATEWAY_TIMEOUT, "Live part timed out".into())
+        })?;
         match result {
             Ok(tl::enums::upload::File::File(file)) => {
                 return fmp4::convert(&file.bytes, t)
@@ -188,10 +191,18 @@ async fn fetch(app: &Shared, id: &str, t: i64) -> ApiResult<fmp4::Segment> {
             {
                 last = Some(InvocationError::Rpc(r))
             }
-            Err(e) => return Err(rpc_error(e)),
+            Err(e) => {
+                // Error names only: no tokens or message contents reach the log.
+                if !matches!(&e, InvocationError::Rpc(r) if r.name.starts_with("TIME_")) {
+                    eprintln!("Live part {t}: {e}");
+                }
+                return Err(rpc_error(e));
+            }
         }
     }
-    Err(rpc_error(last.expect("at least one quality")))
+    let e = last.expect("at least one quality");
+    eprintln!("Live part {t}: {e}");
+    Err(rpc_error(e))
 }
 async fn join(app: &Shared, id: &str) -> ApiResult<()> {
     // Holding the lock lets parallel part requests share a single join.

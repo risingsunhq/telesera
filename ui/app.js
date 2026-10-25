@@ -278,13 +278,16 @@
     await new Promise(function (resolve) { source.addEventListener('sourceopen', resolve, { once: true }); }); URL.revokeObjectURL(video.src);
     function append(data) { return new Promise(function (resolve, reject) { buffer.onupdateend = resolve; buffer.onerror = reject; buffer.appendBuffer(data); }); }
     function trim(start, end) { return new Promise(function (resolve) { buffer.onupdateend = resolve; buffer.remove(start, end); }); }
-    async function sync() { var info = await api(chatPath(chat) + '/live'); step = info.step_ms; next = info.time_ms - 2 * step; }
-    // A part can take about as long to download as it lasts, so up to three are fetched ahead and appended in order.
+    async function sync() { var info = await api(chatPath(chat) + '/live'); step = info.step_ms; next = info.time_ms - 6 * step; }
+    // Smoothness over latency: start six parts behind the live edge, keep up to 12 s buffered and fetch four parts ahead, appended in order.
     async function part(time) {
-      for (var attempt = 0; ; attempt++) {
-        var response = await fetch('/api' + chatPath(chat) + '/live/segment?t=' + time, { headers: { Authorization: 'Bearer ' + token }, cache: 'no-store' });
-        if (response.status === 425 && attempt < 20) { await wait(500); continue; }
-        if (response.status === 410) return { expired: true };
+      for (var attempt = 0, failed = 0; ; attempt++) {
+        var response = await fetch('/api' + chatPath(chat) + '/live/segment?t=' + time, { headers: { Authorization: 'Bearer ' + token }, cache: 'no-store' }).catch(function () { return null; });
+        if (response && response.status === 425 && attempt < 20) { await wait(500); continue; }
+        if (response && response.status === 410) return { expired: true };
+        // A stalled or failed part usually arrives on a fresh request; retry it instead of skipping ahead.
+        if ((!response || response.status >= 500) && ++failed < 4) { await wait(300); continue; }
+        if (!response) throw new Error(t("The connection was interrupted. Try again in a moment."));
         if (!response.ok) { var body = await response.json().catch(function () { return {}; }), failure = new Error(apiError(body.error, response.status)); failure.final = response.status === 404; throw failure; }
         return { data: await response.arrayBuffer(), codecs: response.headers.get('x-codecs') };
       }
@@ -294,8 +297,8 @@
       try {
         if (!next) { pending = []; await sync(); }
         var ranges = video.buffered, last = ranges.length - 1;
-        if (last >= 0 && ranges.end(last) - video.currentTime > 6) { await wait(500); continue; }
-        while (pending.length < 3) { var request = part(next); request.catch(function () {}); pending.push(request); next += step; }
+        if (last >= 0 && ranges.end(last) - video.currentTime > 12) { await wait(500); continue; }
+        while (pending.length < 4) { var request = part(next); request.catch(function () {}); pending.push(request); next += step; }
         var result = await pending.shift(); if (run !== liveRun) return;
         if (result.expired) { next = 0; continue; }
         if (!buffer) buffer = source.addSourceBuffer('video/mp4; codecs="' + result.codecs + '"');
