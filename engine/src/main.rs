@@ -146,6 +146,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/chats/{id}/send", post(telegram::send))
         .route("/api/chats/{id}/live", get(live::info))
         .route("/api/chats/{id}/live/segment", get(live::segment))
+        .route("/api/chats/{id}/live/leave", post(live::leave))
         .route("/api/chats/{id}/photo", get(media::photo))
         .route(
             "/api/chats/{id}/messages/{message}/thumbnail",

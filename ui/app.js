@@ -311,7 +311,7 @@
       }
     }
   }
-  function closeVideo() { liveRun++; $('player').classList.remove('live'); saveResume(); $('video').pause(); $('video').removeAttribute('src'); $('video').load(); show($('player'), false); state.videoKey = ''; setFocus(state.returnFocus); }
+  function closeVideo() { if ($('player').classList.contains('live')) api(chatPath(state.liveChat) + '/live/leave', {}).catch(function () {}); liveRun++; $('player').classList.remove('live'); saveResume(); $('video').pause(); $('video').removeAttribute('src'); $('video').load(); show($('player'), false); state.videoKey = ''; setFocus(state.returnFocus); }
   function updatePlay() { var paused = $('video').paused; $('toggle-play').textContent = paused ? '▶' : 'Ⅱ'; $('toggle-play').setAttribute('aria-label', paused ? t("Play") : t("Pause")); }
   function togglePlay() { if ($('video').paused) { var promise = $('video').play(); if (promise) promise.catch(function () { toast(t("Playback is unavailable. Please retry.")); }); } else $('video').pause(); }
   function seek(seconds) { var video = $('video'); if (!$('player').classList.contains('live') && Number.isFinite(video.duration)) { video.currentTime = Math.max(0, Math.min(video.duration, video.currentTime + seconds)); saveResume(); } }
