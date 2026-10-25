@@ -43,7 +43,7 @@ async fn chat_json(
         _ => "group",
     };
     Ok(
-        json!({"id":p.id().bot_api_dialog_id_unchecked().to_string(),"title":p.name().unwrap_or("Telegram"),"kind":kind,"archived":archived,"unread":unread,"photo":p.photo(false).await?.is_some(),"last_text":last_text,"username":p.username()}),
+        json!({"id":p.id().bot_api_dialog_id_unchecked().to_string(),"title":p.name().unwrap_or("Telegram"),"kind":kind,"archived":archived,"unread":unread,"photo":p.photo(false).await?.is_some(),"last_text":last_text,"username":p.username(),"live":matches!(p, Peer::Channel(c) if c.raw.call_active)}),
     )
 }
 

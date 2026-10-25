@@ -1,3 +1,5 @@
+mod fmp4;
+mod live;
 mod media;
 mod network;
 mod session;
@@ -60,6 +62,7 @@ struct App {
     images: Arc<Semaphore>,
     image_cache: Mutex<media::ImageCache>,
     stickers: Mutex<stickers::Catalog>,
+    live: Mutex<HashMap<String, live::Stream>>,
 }
 type Shared = Arc<App>;
 struct ApiError(StatusCode, String);
@@ -124,6 +127,7 @@ async fn main() -> anyhow::Result<()> {
         images: Arc::new(Semaphore::new(4)),
         image_cache: Mutex::new(media::ImageCache::default()),
         stickers: Mutex::new(stickers::Catalog::default()),
+        live: Mutex::new(HashMap::new()),
     });
     let api = Router::new()
         .route("/api/status", get(status))
@@ -140,6 +144,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/chats/resolve", get(telegram::resolve))
         .route("/api/chats/{id}/messages", get(telegram::messages))
         .route("/api/chats/{id}/send", post(telegram::send))
+        .route("/api/chats/{id}/live", get(live::info))
+        .route("/api/chats/{id}/live/segment", get(live::segment))
         .route("/api/chats/{id}/photo", get(media::photo))
         .route(
             "/api/chats/{id}/messages/{message}/thumbnail",
