@@ -15,6 +15,7 @@ Telesera uses the Telegram API and is part of the Telegram ecosystem. It is not 
 - Text messages and supported bot keyboard and callback buttons.
 - Sticker sending from recent stickers, favorites and installed packs, with still previews for animated/video stickers.
 - Embedded Telegram Mini Apps with a restricted web bridge.
+- Channel live streams (RTMP) in the TV player, marked LIVE in the chat list.
 - Video artwork and Play together, central player controls, 15-second seeking and saved playback positions.
 - Magic Remote pointer and directional navigation, including text-entry handling.
 - Profile pictures, readable normalization of decorative titles and a dim moving clock/date screensaver.

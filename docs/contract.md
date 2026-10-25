@@ -7,13 +7,16 @@ POST /api/auth/phone {phone} -> {step:"code"}
 POST /api/auth/code {code} -> {step:"ready"|"password"}
 POST /api/auth/password {password} -> {step:"ready"}
 POST /api/auth/qr and POST /api/auth/qr/check -> {step:"qr",url:string,token:string,expires:integer} | {step:"password"} | {step:"ready"}. QR tokens are short-lived credentials; never log or publish them.
-GET /api/chats -> {chats:[{id,title,kind:"user"|"bot"|"group"|"channel"|"saved",archived:bool,unread:number,photo:bool,last_text?:string,username?:string}]}
+GET /api/chats -> {chats:[{id,title,kind:"user"|"bot"|"group"|"channel"|"saved",archived:bool,unread:number,photo:bool,last_text?:string,username?:string,live:bool}]}
 GET /api/chats/resolve?username=NAME -> {chat:<same chat object>}; read-only username resolution and peer caching. A leading @ is accepted; usernames contain 5–32 ASCII letters, digits or underscores and begin with a letter. Resolution never sends messages.
 GET /api/chats/:id/messages?before=INTEGER -> {messages:[{id:integer,chat_id:string,date:string,text:string,outgoing:bool,media?:{kind:"video"|"photo"|"document"|"sticker",name?:string,mime:string,size:number,duration?:number,emoji?:string,format?:"static"|"animated"|"video"},buttons?:[[{text,kind:"callback"|"text"|"url"|"miniapp"|"unsupported",url?:string,row:number,col:number}]]}],has_more:bool}
 GET /api/chats/:id/photo -> image
 GET /api/chats/:id/messages/:messageId/thumbnail -> image
 GET /api/chats/:id/messages/:messageId/media -> media with Range support; bounded-memory streaming, do not download entire video before playing.
 POST /api/chats/:id/send {text} -> {id:integer}
+GET /api/chats/:id/live -> {time_ms:integer,step_ms:integer,video:bool}; resolves the channel's active stream. 404 when no watchable stream exists, 425 while it has no parts yet (also during a broadcaster restart).
+GET /api/chats/:id/live/segment?t=MS -> video/mp4 (fMP4 init + one fragment) with x-codecs header for Media Source Extensions. t is a multiple of step_ms from the latest /live response. 425 = part not ready yet, 410 = part expired (call /live again), 504 = Telegram stalled for 3 s (retry the same part). Parts are remuxed, never transcoded; quality 2 (best) falls back to 1 and 0.
+POST /api/chats/:id/live/leave -> {}; leaves the call if the engine joined it. Some streams return GROUPCALL_JOIN_MISSING to non-members: the engine then joins once as a muted viewer (shared by parallel part requests) and retries.
 POST /api/chats/:id/messages/:messageId/button {row,col} -> {kind:"callback"|"url"|"miniapp"|"text",message?:string,url?:string}; server must resolve button from actual Telegram message, no client supplied arbitrary callback payload or URL trust.
 POST /api/miniapp {url:string} -> {url:string}; parse official Telegram t.me bot/startapp links, RequestMainWebView or proper rawAPI, no arbitrary outbound fetch. Return signed HTTPS URL to UI iframe. Restrict iframe permissions camera/mic/geolocation, limited explicit Telegram WebApp bridge handling. No arbitrary parent postMessage privileged ops.
 Bot poll/new messages: UI can poll active messages every 5s, refresh after send/callback; preserve scroll and focus. Chat list refresh every30s. Engine cache safe for photos and peers. Sensitive data private.

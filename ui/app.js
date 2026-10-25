@@ -6,8 +6,8 @@
   var token = new URLSearchParams(location.hash.slice(1)).get('token');
   if (token) { sessionStorage.setItem('telesera-token', token); history.replaceState(null, '', location.pathname + location.search); }
   token = token || sessionStorage.getItem('telesera-token') || '';
-  var state = { chats: [], chat: null, archived: false, messages: [], hasMore: false, authStep: 'phone', loading: false, videoKey: '', returnFocus: null, miniOrigin: '', miniBack: false, lastActivity: Date.now(), lastProgress: 0, lastTime: 0 };
-  var toastTimer, chatRequest = 0, lastChatsPayload = null;
+  var state = { chats: [], chat: null, archived: false, messages: [], hasMore: false, authStep: 'phone', loading: false, videoKey: '', returnFocus: null, miniOrigin: '', miniBack: false, lastActivity: Date.now(), lastInput: Date.now(), lastProgress: 0, lastTime: 0 };
+  var toastTimer, chatRequest = 0, lastChatsPayload = null, liveRun = 0;
   var miniTheme = { bg_color: '#172238', text_color: '#e7edf8', hint_color: '#a0aec5', link_color: '#aac8ff', button_color: '#6389db', button_text_color: '#ffffff', secondary_bg_color: '#1b2941' };
   function normalize(value) { return String(value || '').normalize('NFKC'); }
   function el(tag, className, text) { var node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; }
@@ -21,6 +21,7 @@
     if (/PASSWORD_HASH_INVALID|password.*incorrect|invalid.*password/i.test(raw)) return t('The password is incorrect. Please try again.');
     if (/CHAT_WRITE_FORBIDDEN|USER_BANNED_IN_CHANNEL|CHAT_SEND_STICKERS_FORBIDDEN|CHAT_SEND_MEDIA_FORBIDDEN/i.test(raw)) return t('You cannot send messages in this chat.');
     if (/4096/.test(raw)) return t('Messages must contain 1 to 4096 characters.');
+    if (/live stream/i.test(raw)) return t('The live stream has ended or is not available.');
     if (/Refresh the sticker picker|FILE_REFERENCE_EXPIRED|STICKER_INVALID/i.test(raw)) return t('Reopen the sticker picker and try again.');
     if (status === 401 || /AUTH_KEY_UNREGISTERED|SESSION_REVOKED/i.test(raw)) return t('Sign in again to continue.');
     return t('The operation failed. Please try again.');
@@ -35,7 +36,7 @@
       response = await fetch('/api' + path, options);
       var body;
       try { body = await response.json(); } catch (error) { if (controller.signal.aborted) throw error; throw new Error(t("The service is not ready yet. Try again in a moment.")); }
-      if (!response.ok) throw new Error(apiError(body.error, response.status));
+      if (!response.ok) { var failure = new Error(apiError(body.error, response.status)); failure.status = response.status; throw failure; }
       return body;
     } catch (error) {
       if (controller.signal.aborted) throw new Error(t("The response is taking too long. Check your connection and try again."));
@@ -112,8 +113,9 @@
     var chats = state.chats.filter(function (chat) { return Boolean(chat.archived) === state.archived && normalize(chat.title).toLocaleLowerCase(locale).includes(query); });
     chats.forEach(function (chat) {
       var row = el('button', 'chat-row' + (state.chat && state.chat.id === chat.id ? ' selected' : '')); row.dataset.focusKey = 'chat-' + chat.id; row.setAttribute('aria-label', normalize(chat.title) + (chat.unread ? ", " + t("{count} unread messages", { count: chat.unread }) : '')); row.setAttribute('aria-current', state.chat && state.chat.id === chat.id ? 'true' : 'false'); row.appendChild(avatar(chat));
-      var content = el('span', 'chat-row-content'); content.appendChild(el('span', 'chat-row-title', normalize(chat.title))); content.appendChild(el('span', 'chat-preview', normalize(chat.last_text || ({ bot: t("Bot"), channel: t("Channel"), group: t("Group"), saved: t("Saved Messages") }[chat.kind] || t("Open conversation"))))); row.appendChild(content); if (chat.unread) row.appendChild(el('span', 'unread', chat.unread > 99 ? '99+' : chat.unread)); row.addEventListener('click', function () { openChat(chat); }); container.appendChild(row);
+      var content = el('span', 'chat-row-content'); content.appendChild(el('span', 'chat-row-title', normalize(chat.title))); content.appendChild(el('span', 'chat-preview', normalize(chat.last_text || ({ bot: t("Bot"), channel: t("Channel"), group: t("Group"), saved: t("Saved Messages") }[chat.kind] || t("Open conversation"))))); row.appendChild(content); if (chat.live) row.appendChild(el('span', 'live-badge', t("Live"))); if (chat.unread) row.appendChild(el('span', 'unread', chat.unread > 99 ? '99+' : chat.unread)); row.addEventListener('click', function () { openChat(chat); }); container.appendChild(row);
     });
+    if (state.chat) { var current = state.chats.find(function (chat) { return chat.id === state.chat.id; }); show($('watch-live'), Boolean(current && current.live)); }
     if (!chats.length) container.appendChild(el('p', 'list-empty', query ? t("No chats found.") : state.archived ? t("No archived chats.") : t("Your chats will appear here.")));
     container.scrollTop = scroll; restoreFocus(container, focus);
   }
@@ -121,7 +123,7 @@
   function selectArchive(archived) { state.archived = archived; $('inbox-tab').classList.toggle('selected', !archived); $('archive-tab').classList.toggle('selected', archived); $('inbox-tab').setAttribute('aria-pressed', String(!archived)); $('archive-tab').setAttribute('aria-pressed', String(archived)); renderChats(); }
   async function openChat(chat) {
     closeStickers(false); state.chat = chat; state.messages = []; state.hasMore = false; chatRequest++; state.loading = false;
-    $('app').classList.add('chat-open'); show($('welcome'), false); show($('conversation-head'), true); show($('message-list'), true); show($('composer'), true); show($('chat-error'), false); $('message-list').textContent = ''; $('message-list').appendChild(el('p', 'list-empty', t("Loading…"))); $('chat-title').textContent = normalize(chat.title); $('chat-kind').textContent = { bot: t("Bot"), user: t("Conversation"), group: t("Group"), channel: t("Channel"), saved: t("Saved Messages") }[chat.kind] || t("Conversation"); $('chat-avatar').textContent = ''; $('chat-avatar').appendChild(avatar(chat)); show($('bot-app'), chat.kind === 'bot' && Boolean(chat.username)); $('message-input').value = ''; renderChats(); await loadMessages(false, true);
+    $('app').classList.add('chat-open'); show($('welcome'), false); show($('conversation-head'), true); show($('message-list'), true); show($('composer'), true); show($('chat-error'), false); $('message-list').textContent = ''; $('message-list').appendChild(el('p', 'list-empty', t("Loading…"))); $('chat-title').textContent = normalize(chat.title); $('chat-kind').textContent = { bot: t("Bot"), user: t("Conversation"), group: t("Group"), channel: t("Channel"), saved: t("Saved Messages") }[chat.kind] || t("Conversation"); $('chat-avatar').textContent = ''; $('chat-avatar').appendChild(avatar(chat)); show($('bot-app'), chat.kind === 'bot' && Boolean(chat.username)); show($('watch-live'), Boolean(chat.live)); $('message-input').value = ''; renderChats(); await loadMessages(false, true);
     if (state.chat && state.chat.id === chat.id) {
       var messages = $('message-list').querySelectorAll('.message'), last = messages[messages.length - 1];
       var actions = last ? visibleFocusable(last) : [];
@@ -265,10 +267,63 @@
   function openVideo(message, chat) {
     state.returnFocus = document.activeElement; state.videoKey = chat.id + '-' + message.id; state.lastProgress = 0; state.lastTime = 0; show($('player'), true); show($('player-error'), false); $('player-title').textContent = message.media.name || t("Video"); $('video').src = resource(mediaPath(chat, message) + '/media'); $('video').load(); setFocus($('toggle-play')); var promise = $('video').play(); if (promise) promise.catch(function () { updatePlay(); });
   }
-  function closeVideo() { saveResume(); $('video').pause(); $('video').removeAttribute('src'); $('video').load(); show($('player'), false); state.videoKey = ''; setFocus(state.returnFocus); }
+  function wait(ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); }
+  function liveError(message) { $('player-error').querySelector('p').textContent = message; show($('player-error'), true); setFocus($('retry-video')); }
+  // Telegram serves live streams as one-second parts; the engine returns each as a self-contained fMP4 segment.
+  async function openLive(chat) {
+    if (!window.MediaSource) { toast(t("Live streams are not supported on this TV.")); return; }
+    var video = $('video'), run = ++liveRun, source = new MediaSource(), buffer = null, next = 0, step = 1000, failures = 0, edge = 0;
+    if ($('player').hidden) state.returnFocus = document.activeElement;
+    state.videoKey = ''; state.liveChat = chat; state.lastProgress = 0; state.lastTime = 0; $('player').classList.add('live'); show($('player'), true); show($('player-error'), false); $('player-title').textContent = normalize(chat.title) + ' · ' + t("Live"); video.src = URL.createObjectURL(source); setFocus($('toggle-play')); var start = video.play(); if (start) start.catch(updatePlay);
+    await new Promise(function (resolve) { source.addEventListener('sourceopen', resolve, { once: true }); }); URL.revokeObjectURL(video.src);
+    function append(data) { return new Promise(function (resolve, reject) { buffer.onupdateend = resolve; buffer.onerror = reject; buffer.appendBuffer(data); }); }
+    function trim(start, end) { return new Promise(function (resolve) { buffer.onupdateend = resolve; buffer.remove(start, end); }); }
+    async function sync() {
+      // 425 means no stream parts yet, also while the broadcaster restarts its feed.
+      for (var tries = 0; ; tries++) { try { var info = await api(chatPath(chat) + '/live'); break; } catch (error) { if (error.status !== 425 || tries >= 45) throw error; await wait(2000); if (run !== liveRun) return false; } }
+      // A restarted feed begins a new timeline; rebuild the player instead of mixing it with the old buffer.
+      if (edge && info.time_ms < edge - 5000) { openLive(chat); return false; }
+      edge = info.time_ms; step = info.step_ms; next = info.time_ms - 6 * step; return true;
+    }
+    // Smoothness over latency: start six parts behind the live edge, keep up to 12 s buffered and fetch four parts ahead, appended in order.
+    async function part(time) {
+      for (var attempt = 0, failed = 0; ; attempt++) {
+        var response = await fetch('/api' + chatPath(chat) + '/live/segment?t=' + time, { headers: { Authorization: 'Bearer ' + token }, cache: 'no-store' }).catch(function () { return null; });
+        if (response && response.status === 425 && attempt < 20) { await wait(500); continue; }
+        if (response && response.status === 410) return { expired: true };
+        // A stalled or failed part usually arrives on a fresh request; retry it instead of skipping ahead.
+        if ((!response || response.status >= 500) && ++failed < 4) { await wait(300); continue; }
+        if (!response) throw new Error(t("The connection was interrupted. Try again in a moment."));
+        if (!response.ok) { var body = await response.json().catch(function () { return {}; }), failure = new Error(apiError(body.error, response.status)); failure.final = response.status === 404; throw failure; }
+        return { data: await response.arrayBuffer(), codecs: response.headers.get('x-codecs') };
+      }
+    }
+    var pending = [];
+    while (run === liveRun) {
+      try {
+        if (!next) { pending = []; if (!await sync()) return; }
+        var ranges = video.buffered, last = ranges.length - 1;
+        if (last >= 0 && ranges.end(last) - video.currentTime > 12) { await wait(500); continue; }
+        while (pending.length < 4) { var request = part(next); request.catch(function () {}); pending.push(request); next += step; }
+        var result = await pending.shift(); if (run !== liveRun) return;
+        if (result.expired) { next = 0; continue; }
+        if (!buffer) buffer = source.addSourceBuffer('video/mp4; codecs="' + result.codecs + '"');
+        await append(result.data); failures = 0; ranges = video.buffered; last = ranges.length - 1;
+        // Jump to the newest range after a resync or when playback falls outside the buffer.
+        if (video.currentTime < ranges.start(last) || video.currentTime > ranges.end(last)) { video.currentTime = ranges.start(last); var promise = video.play(); if (promise) promise.catch(updatePlay); }
+        if (video.currentTime - ranges.start(0) > 30) await trim(ranges.start(0), video.currentTime - 10);
+      } catch (error) {
+        if (run !== liveRun) return;
+        if (error.final || ++failures >= 5) { liveError(error.message || t("Playback is unavailable. Please retry.")); return; }
+        // Drop the queue and resynchronise with the live edge after a failed part.
+        next = 0; await wait(1000 * failures);
+      }
+    }
+  }
+  function closeVideo() { if ($('player').classList.contains('live')) api(chatPath(state.liveChat) + '/live/leave', {}).catch(function () {}); liveRun++; $('player').classList.remove('live'); saveResume(); $('video').pause(); $('video').removeAttribute('src'); $('video').load(); show($('player'), false); state.videoKey = ''; setFocus(state.returnFocus); }
   function updatePlay() { var paused = $('video').paused; $('toggle-play').textContent = paused ? '▶' : 'Ⅱ'; $('toggle-play').setAttribute('aria-label', paused ? t("Play") : t("Pause")); }
   function togglePlay() { if ($('video').paused) { var promise = $('video').play(); if (promise) promise.catch(function () { toast(t("Playback is unavailable. Please retry.")); }); } else $('video').pause(); }
-  function seek(seconds) { var video = $('video'); if (Number.isFinite(video.duration)) { video.currentTime = Math.max(0, Math.min(video.duration, video.currentTime + seconds)); saveResume(); } }
+  function seek(seconds) { var video = $('video'); if (!$('player').classList.contains('live') && Number.isFinite(video.duration)) { video.currentTime = Math.max(0, Math.min(video.duration, video.currentTime + seconds)); saveResume(); } }
   function openMiniapp(url) {
     var parsed = safeHTTPS(url); if (!parsed) { toast(t("The app did not return a secure link.")); return; }
     state.returnFocus = document.activeElement; state.miniOrigin = parsed.origin; state.miniBack = false; show($('miniapp-back'), false); show($('miniapp-footer'), false); show($('miniapp'), true); show($('miniapp-loading'), true); $('miniapp-title').textContent = state.chat ? normalize(state.chat.title) : 'Mini App'; $('miniapp-frame').src = parsed.href; setFocus($('miniapp-close'));
@@ -315,23 +370,25 @@
   }
   document.addEventListener('keydown', function (event) {
     if (!$('screensaver').hidden) { show($('screensaver'), false); state.lastActivity = Date.now(); event.preventDefault(); event.stopImmediatePropagation(); return; }
-    state.lastActivity = Date.now(); var key = event.key, editing = event.target.matches('input:not([type="range"]),textarea,[contenteditable="true"]');
+    state.lastActivity = Date.now(); state.lastInput = Date.now(); var key = event.key, editing = event.target.matches('input:not([type="range"]),textarea,[contenteditable="true"]');
+    // The first key on hidden player controls only reveals them; Back and media keys act immediately.
+    if ($('player').classList.contains('idle')) { $('player').classList.remove('idle'); if (!(key === 'Escape' || key === 'BrowserBack' || key === 'MediaPlayPause' || [461, 415, 19, 179].includes(event.keyCode))) { event.preventDefault(); return; } }
     if (key === 'Escape' || key === 'BrowserBack' || event.keyCode === 461) { event.preventDefault(); back(); return; }
     if (editing) { if (key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); event.target.blur(); setFocus(event.target.id === 'login-input' ? $('login-next') : event.target.id === 'message-input' ? $('send-button') : $('chat-list').querySelector('button')); } return; }
     if (!$('player').hidden) { if (key === 'ArrowLeft' || key === 'ArrowRight') { event.preventDefault(); seek(key === 'ArrowLeft' ? -15 : 15); return; } if (key === ' ' || key === 'MediaPlayPause' || event.keyCode === 179) { event.preventDefault(); togglePlay(); return; } if (event.keyCode === 415) { if ($('video').paused) togglePlay(); return; } if (event.keyCode === 19) { $('video').pause(); return; } }
     if (/^Arrow(Up|Down|Left|Right)$/.test(key)) { event.preventDefault(); moveFocus(key); }
     if (key === 'Tab' && focusScope() !== $('app')) { var nodes = visibleFocusable(focusScope()), first = nodes[0], last = nodes[nodes.length - 1]; if (event.shiftKey && document.activeElement === first) { event.preventDefault(); setFocus(last); } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); setFocus(first); } }
   }, true);
-  ['pointerdown', 'mousemove', 'touchstart'].forEach(function (type) { document.addEventListener(type, function (event) { state.lastActivity = Date.now(); if (!$('screensaver').hidden) { show($('screensaver'), false); event.preventDefault(); event.stopImmediatePropagation(); } }, { capture: true, passive: false }); });
-  function updateClock() { var now = new Date(); $('clock').textContent = time(now); $('saver-clock').querySelector('time').textContent = time(now); $('saver-clock').querySelector('p').textContent = now.toLocaleDateString(locale, { weekday: 'long', day: 'numeric', month: 'long' }); var playing = !$('player').hidden && !$('video').paused && Date.now() - state.lastProgress < 20000; if (playing || !$('miniapp').hidden) state.lastActivity = Date.now(); if (Date.now() - state.lastActivity >= 180000) show($('screensaver'), true); }
+  ['pointerdown', 'mousemove', 'touchstart'].forEach(function (type) { document.addEventListener(type, function (event) { state.lastActivity = Date.now(); state.lastInput = Date.now(); $('player').classList.remove('idle'); if (!$('screensaver').hidden) { show($('screensaver'), false); event.preventDefault(); event.stopImmediatePropagation(); } }, { capture: true, passive: false }); });
+  function updateClock() { var now = new Date(); $('clock').textContent = time(now); $('saver-clock').querySelector('time').textContent = time(now); $('saver-clock').querySelector('p').textContent = now.toLocaleDateString(locale, { weekday: 'long', day: 'numeric', month: 'long' }); var playing = !$('player').hidden && !$('video').paused && Date.now() - state.lastProgress < 20000; if (playing || !$('miniapp').hidden) state.lastActivity = Date.now(); $('player').classList.toggle('idle', playing && $('player-error').hidden && Date.now() - state.lastInput >= 4000); if (Date.now() - state.lastActivity >= 180000) show($('screensaver'), true); }
   $('sticker-button').onclick = openStickers; $('stickers-close').onclick = function () { closeStickers(); }; $('stickers-back').onclick = function () { stickers.request++; stickers.pack = null; renderStickers(); setFocus($('stickers-sets')); };
   ['recent', 'favorites', 'sets'].forEach(function (tab) { $('stickers-' + tab).onclick = function () { stickers.request++; stickers.tab = tab; stickers.pack = null; renderStickers(); }; });
   $('retry-connection').onclick = connect; $('login-next').onclick = login; $('login-back').onclick = function () { state.authStep = 'phone'; renderLogin(); }; $('search').addEventListener('input', renderChats); $('inbox-tab').onclick = function () { selectArchive(false); }; $('archive-tab').onclick = function () { selectArchive(true); }; $('send-button').onclick = send; $('retry-chat').onclick = function () { loadMessages(); }; $('chat-back').onclick = function () { $('app').classList.remove('chat-open'); setFocus($('chat-list').querySelector('.selected')); }; $('bot-app').onclick = function () { if (state.chat && state.chat.username) resolveMiniapp('https://t.me/' + encodeURIComponent(state.chat.username) + '?startapp'); };
   $('about-button').onclick = function () { show($('about'), true); setFocus($('about-close')); }; $('about-close').onclick = function () { show($('about'), false); setFocus($('about-button')); };
-  $('close-player').onclick = closeVideo; $('toggle-play').onclick = togglePlay; $('seek-back').onclick = function () { seek(-15); }; $('seek-forward').onclick = function () { seek(15); }; $('retry-video').onclick = function () { show($('player-error'), false); $('video').load(); var promise = $('video').play(); if (promise) promise.catch(updatePlay); }; $('video-progress').addEventListener('input', function () { if (Number.isFinite($('video').duration)) { $('video').currentTime = Number(this.value) / 1000 * $('video').duration; saveResume(); } });
+  $('close-player').onclick = closeVideo; $('toggle-play').onclick = togglePlay; $('seek-back').onclick = function () { seek(-15); }; $('seek-forward').onclick = function () { seek(15); }; $('watch-live').onclick = function () { if (state.chat) openLive(state.chat); }; $('retry-video').onclick = function () { if ($('player').classList.contains('live')) { openLive(state.liveChat); return; } show($('player-error'), false); $('video').load(); var promise = $('video').play(); if (promise) promise.catch(updatePlay); }; $('video-progress').addEventListener('input', function () { if (Number.isFinite($('video').duration)) { $('video').currentTime = Number(this.value) / 1000 * $('video').duration; saveResume(); } });
   $('video').addEventListener('loadedmetadata', function () { var resume = 0; try { resume = Number(localStorage.getItem('telesera-resume-' + state.videoKey)) || 0; } catch (_) {} if (resume > 0 && Number.isFinite(this.duration) && resume < this.duration - 5) this.currentTime = resume; $('video-duration').textContent = duration(this.duration); });
   $('video').addEventListener('timeupdate', function () { if (Math.abs(this.currentTime - state.lastTime) > .05 && !this.paused && this.readyState >= 2) { state.lastProgress = Date.now(); state.lastTime = this.currentTime; } $('video-time').textContent = duration(this.currentTime); $('video-duration').textContent = duration(this.duration); $('video-progress').value = Number.isFinite(this.duration) && this.duration ? Math.round(this.currentTime / this.duration * 1000) : 0; saveResume(); });
-  ['play', 'pause', 'ended'].forEach(function (event) { $('video').addEventListener(event, updatePlay); }); $('video').addEventListener('error', function () { if (state.videoKey && this.getAttribute('src')) { $('player-error').querySelector('p').textContent = t(this.error && this.error.code === 2 ? 'The video connection was interrupted. Check your network and retry.' : this.error && this.error.code === 3 ? 'The TV could not decode this video. Try another version of the file.' : this.error && this.error.code === 4 ? 'This video format is not supported by the TV. Try another version of the file.' : 'Playback is unavailable. Please retry.'); show($('player-error'), true); } });
+  ['play', 'pause', 'ended'].forEach(function (event) { $('video').addEventListener(event, updatePlay); }); $('video').addEventListener('error', function () { if ((state.videoKey || $('player').classList.contains('live')) && this.getAttribute('src')) { $('player-error').querySelector('p').textContent = t(this.error && this.error.code === 2 ? 'The video connection was interrupted. Check your network and retry.' : this.error && this.error.code === 3 ? 'The TV could not decode this video. Try another version of the file.' : this.error && this.error.code === 4 ? 'This video format is not supported by the TV. Try another version of the file.' : 'Playback is unavailable. Please retry.'); show($('player-error'), true); } });
   $('miniapp-close').onclick = closeMiniapp; $('miniapp-back').onclick = function () { miniEvent('back_button_pressed'); }; $('miniapp-main').onclick = function () { miniEvent('main_button_pressed'); }; $('miniapp-frame').addEventListener('load', function () { show($('miniapp-loading'), false); miniEvent('theme_changed', { theme_params: miniTheme }); miniEvent('viewport_changed', { height: this.clientHeight, is_state_stable: true, is_expanded: true }); });
   window.addEventListener('beforeunload', saveResume); document.addEventListener('visibilitychange', function () { if (!document.hidden) { state.lastActivity = Date.now(); if (!$('app').hidden) { loadChats(); loadMessages(); } else if (!$('connection').hidden) connect(); } });
   window.addEventListener('online', function () { if (!$('connection').hidden) connect(); else if (!$('app').hidden) { loadChats(); loadMessages(); } });
