@@ -36,7 +36,7 @@
       response = await fetch('/api' + path, options);
       var body;
       try { body = await response.json(); } catch (error) { if (controller.signal.aborted) throw error; throw new Error(t("The service is not ready yet. Try again in a moment.")); }
-      if (!response.ok) throw new Error(apiError(body.error, response.status));
+      if (!response.ok) { var failure = new Error(apiError(body.error, response.status)); failure.status = response.status; throw failure; }
       return body;
     } catch (error) {
       if (controller.signal.aborted) throw new Error(t("The response is taking too long. Check your connection and try again."));
@@ -272,13 +272,19 @@
   // Telegram serves live streams as one-second parts; the engine returns each as a self-contained fMP4 segment.
   async function openLive(chat) {
     if (!window.MediaSource) { toast(t("Live streams are not supported on this TV.")); return; }
-    var video = $('video'), run = ++liveRun, source = new MediaSource(), buffer = null, next = 0, step = 1000, failures = 0;
+    var video = $('video'), run = ++liveRun, source = new MediaSource(), buffer = null, next = 0, step = 1000, failures = 0, edge = 0;
     if ($('player').hidden) state.returnFocus = document.activeElement;
     state.videoKey = ''; state.liveChat = chat; state.lastProgress = 0; state.lastTime = 0; $('player').classList.add('live'); show($('player'), true); show($('player-error'), false); $('player-title').textContent = normalize(chat.title) + ' · ' + t("Live"); video.src = URL.createObjectURL(source); setFocus($('toggle-play')); var start = video.play(); if (start) start.catch(updatePlay);
     await new Promise(function (resolve) { source.addEventListener('sourceopen', resolve, { once: true }); }); URL.revokeObjectURL(video.src);
     function append(data) { return new Promise(function (resolve, reject) { buffer.onupdateend = resolve; buffer.onerror = reject; buffer.appendBuffer(data); }); }
     function trim(start, end) { return new Promise(function (resolve) { buffer.onupdateend = resolve; buffer.remove(start, end); }); }
-    async function sync() { var info = await api(chatPath(chat) + '/live'); step = info.step_ms; next = info.time_ms - 6 * step; }
+    async function sync() {
+      // 425 means no stream parts yet, also while the broadcaster restarts its feed.
+      for (var tries = 0; ; tries++) { try { var info = await api(chatPath(chat) + '/live'); break; } catch (error) { if (error.status !== 425 || tries >= 45) throw error; await wait(2000); if (run !== liveRun) return false; } }
+      // A restarted feed begins a new timeline; rebuild the player instead of mixing it with the old buffer.
+      if (edge && info.time_ms < edge - 5000) { openLive(chat); return false; }
+      edge = info.time_ms; step = info.step_ms; next = info.time_ms - 6 * step; return true;
+    }
     // Smoothness over latency: start six parts behind the live edge, keep up to 12 s buffered and fetch four parts ahead, appended in order.
     async function part(time) {
       for (var attempt = 0, failed = 0; ; attempt++) {
@@ -295,7 +301,7 @@
     var pending = [];
     while (run === liveRun) {
       try {
-        if (!next) { pending = []; await sync(); }
+        if (!next) { pending = []; if (!await sync()) return; }
         var ranges = video.buffered, last = ranges.length - 1;
         if (last >= 0 && ranges.end(last) - video.currentTime > 12) { await wait(500); continue; }
         while (pending.length < 4) { var request = part(next); request.catch(function () {}); pending.push(request); next += step; }

@@ -23,7 +23,10 @@ fn rpc_error(e: InvocationError) -> ApiError {
         InvocationError::Rpc(r) if r.name == "TIME_TOO_BIG" => {
             ApiError(StatusCode::TOO_EARLY, "Live part not ready".into())
         }
-        InvocationError::Rpc(r) if r.name.starts_with("TIME_") => {
+        // A restarted source invalidates the channel; resynchronising picks the new one.
+        InvocationError::Rpc(r)
+            if r.name.starts_with("TIME_") || r.name == "VIDEO_CHANNEL_INVALID" =>
+        {
             ApiError(StatusCode::GONE, "Live part expired".into())
         }
         // Some streams are only served to call members; segment() joins and retries.
@@ -92,7 +95,13 @@ pub async fn info(State(app): State<Shared>, Path(id): Path<String>) -> ApiResul
         .filter(|c| c.channel > 0)
         .min_by_key(|c| c.channel)
         .or(channels.first())
-        .ok_or_else(|| missing("The live stream has not started yet"))?;
+        // Also seen while the broadcaster restarts its RTMP feed.
+        .ok_or_else(|| {
+            ApiError(
+                StatusCode::TOO_EARLY,
+                "The live stream has not started yet".into(),
+            )
+        })?;
     let mut live = app.live.lock().await;
     // A resync keeps the membership so closing the player still leaves the call.
     let (source, joined) = live.get(&id).map_or((0, None), |s| (s.source, s.joined));
@@ -186,6 +195,7 @@ async fn fetch(app: &Shared, id: &str, t: i64) -> ApiResult<fmp4::Segment> {
             Ok(_) => return Err(bad("Unexpected live stream response")),
             Err(InvocationError::Rpc(r))
                 if !r.name.starts_with("TIME_")
+                    && r.name != "VIDEO_CHANNEL_INVALID"
                     && !r.name.starts_with("GROUPCALL_")
                     && !r.name.starts_with("FLOOD_") =>
             {
